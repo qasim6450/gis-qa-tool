@@ -21,7 +21,7 @@ spell = SpellChecker()  # Initialize right after imports
 # Set page config with icon
 st.set_page_config(
     page_title="Zoning Data QA Tool",
-    page_icon="https://github.com/user-attachments/assets/296456ab-1471-4eef-bbe7-42b86f633e4b",  # or "🏙️" as fallback
+    page_icon="zoneomics_icon.png",  # or "🏙️" as fallback
     layout="wide"
 )
 
@@ -824,14 +824,14 @@ def img_to_base64(img_path):
     return base64.b64encode(Path(img_path).read_bytes()).decode()
 
 # 3. Your logo header (replace with your actual path)
-logo_path = "https://github.com/user-attachments/assets/296456ab-1471-4eef-bbe7-42b86f633e4b"  # Update this path
+logo_path = "zoneomics_icon.png"  # Update this path
 logo_base64 = img_to_base64(logo_path)
 
 # 4. Replace your st.title() with this:
 st.markdown(
     f"""
     <div class="header-container">
-        <img class="header-logo" src="https://github.com/user-attachments/assets/296456ab-1471-4eef-bbe7-42b86f633e4b">
+        <img class="header-logo" src="data:image/png;base64,{logo_base64}">
         <h1 class="header-title">Zoning Data Quality Assurance Tool</h1>
     </div>
     """, 
@@ -1081,4 +1081,3 @@ if st.session_state.current_folder and st.session_state.qa_results:
     '<div class="footer">Powered by Zoneomics ©</div>',
     unsafe_allow_html=True
 )
-
