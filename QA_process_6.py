@@ -21,7 +21,7 @@ spell = SpellChecker()  # Initialize right after imports
 # Set page config with icon
 st.set_page_config(
     page_title="Zoning Data QA Tool",
-    page_icon="zoneomics_icon.png",  # or "🏙️" as fallback
+    page_icon="https://github.com/user-attachments/assets/296456ab-1471-4eef-bbe7-42b86f633e4b",  # or "🏙️" as fallback
     layout="wide"
 )
 
