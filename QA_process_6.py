@@ -831,7 +831,7 @@ logo_base64 = img_to_base64(logo_path)
 st.markdown(
     f"""
     <div class="header-container">
-        <img class="header-logo" src="data:image/png;base64,{logo_base64}">
+        <img class="header-logo" src="https://github.com/user-attachments/assets/296456ab-1471-4eef-bbe7-42b86f633e4b">
         <h1 class="header-title">Zoning Data Quality Assurance Tool</h1>
     </div>
     """, 
