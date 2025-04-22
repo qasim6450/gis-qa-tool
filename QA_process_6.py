@@ -824,7 +824,7 @@ def img_to_base64(img_path):
     return base64.b64encode(Path(img_path).read_bytes()).decode()
 
 # 3. Your logo header (replace with your actual path)
-logo_path = "zoneomics_icon.png"  # Update this path
+logo_path = "https://github.com/user-attachments/assets/296456ab-1471-4eef-bbe7-42b86f633e4b"  # Update this path
 logo_base64 = img_to_base64(logo_path)
 
 # 4. Replace your st.title() with this:
