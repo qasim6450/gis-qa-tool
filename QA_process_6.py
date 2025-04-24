@@ -10,13 +10,14 @@ from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 import re
 from difflib import SequenceMatcher
 from typing import List, Dict, Set, Tuple, Optional, Union
-from spellchecker import SpellChecker  # Add with other imports
+from spellchecker import SpellChecker
 import base64
 from pathlib import Path
+import tempfile
+import shutil
+import zipfile
 
-spell = SpellChecker()  # Initialize right after imports
-
-
+spell = SpellChecker()
 
 # Set page config with icon
 st.set_page_config(
@@ -24,6 +25,16 @@ st.set_page_config(
     page_icon="zoneomics_icon.png",  # or "🏙️" as fallback
     layout="wide"
 )
+
+def cleanup_temp_dir(temp_dir):
+    """Remove temporary directory and its contents"""
+    if temp_dir and os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+
+if 'temp_dir' in st.session_state and st.session_state.temp_dir:
+    # Clean up previous temp directory if exists
+    cleanup_temp_dir(st.session_state.temp_dir)
+    del st.session_state.temp_dir
 
 # Custom CSS
 # Add this CSS at the top of your script (with other CSS)
@@ -140,16 +151,52 @@ def validate_city_folder_name(city_folder: str, shp_name: str) -> Tuple[bool, st
     except Exception as e:
         return False, f"Validation error: {str(e)}"
 
+def validate_file_naming(city_folder_path: str, shp_name: str) -> Dict[str, List[str]]:
+    """Validate all file names match the SHP naming convention"""
+    errors = {}
+    base_name = shp_name.lower()
+    
+    # Check PLU files
+    plu_folder = os.path.join(city_folder_path, "PLU")
+    if os.path.exists(plu_folder):
+        plu_files = [f for f in os.listdir(plu_folder) if f.endswith(".csv")]
+        for file in plu_files:
+            if not file.lower().startswith(base_name + "_plu_"):
+                errors.setdefault("PLU", []).append(file)
+    
+    # Check controls file
+    controls_files = [f for f in os.listdir(city_folder_path) 
+                     if "_controls.csv" in f.lower() and not f.lower().startswith(base_name)]
+    if controls_files:
+        errors["Controls"] = controls_files
+    
+    # Check zone type files
+    zone_type_files = [f for f in os.listdir(city_folder_path) 
+                      if "_zone_type" in f.lower() and not f.lower().startswith(base_name)]
+    if zone_type_files:
+        errors["Zone Type"] = zone_type_files
+    
+    return errors
+
+
 def get_shp_file(city_folder_path: str) -> Tuple[Optional[str], Optional[str]]:
     """Find and return the main SHP file path"""
+    # Look for SHP folder in the temp directory
     shp_folder = os.path.join(city_folder_path, "SHP")
     if not os.path.exists(shp_folder):
+        # Try alternate path structure (if zip contained folder)
+        for root, dirs, files in os.walk(city_folder_path):
+            if "SHP" in dirs:
+                shp_folder = os.path.join(root, "SHP")
+                break
+
+    if not os.path.exists(shp_folder):
         return None, "SHP folder not found"
-    
+
     shp_files = [f for f in os.listdir(shp_folder) if f.lower().endswith('.shp')]
     if not shp_files:
         return None, "No SHP files found in SHP folder"
-    
+
     main_shp = shp_files[0]
     return os.path.join(shp_folder, main_shp), None
 
@@ -187,11 +234,14 @@ def create_keys_csv(folder_path: str, shp_path: str) -> Tuple[Optional[str], Opt
         return None, f"Error creating Key_PLUS file: {str(e)}"
 
 def write_in_keys_csv(folder_path: str, shp_path: str, unique_zone_codes: Set[str], 
-                     all_unique_records: Set[str], missing_zones: Set[str]) -> Tuple[Optional[str], Optional[str]]:
+                     plu_folder_path: str, missing_zones: Set[str]) -> Tuple[Optional[str], Optional[str]]:
     """Write data to Key_PLUS file with proper formatting"""
     try:
         file_name = get_csv_name(shp_path)
         csv_filename = os.path.join(folder_path, file_name)
+        
+        # Get all unique PLU use types
+        unique_use_types = get_all_plu_use_types(plu_folder_path)
         
         with open(csv_filename, 'w', newline='') as csv_file:
             writer = csv.writer(csv_file)
@@ -200,16 +250,37 @@ def write_in_keys_csv(folder_path: str, shp_path: str, unique_zone_codes: Set[st
             for item in sorted(unique_zone_codes):
                 writer.writerow([item, 'missing' if item in missing_zones else ''])
             
-            writer.writerow([""])
-            writer.writerow([""])
+            writer.writerow([""])  # Empty line separator
+            writer.writerow([""])  # Empty line separator
             
-            for item in sorted(all_unique_records):
-                formatted_item = PLU_USE_TYPES.get(item, item)
-                writer.writerow([formatted_item])
+            # Write sorted unique use types
+            for use_type in sorted(unique_use_types):
+                writer.writerow([use_type])
                 
         return csv_filename, None
     except Exception as e:
         return None, f"Error writing to Key_PLUS file: {str(e)}"
+    
+def get_all_plu_use_types(plu_folder_path: str) -> Set[str]:
+    """Get all unique PLU use types from all PLU files in the folder"""
+    unique_use_types = set()
+    
+    for file_name in os.listdir(plu_folder_path):
+        if file_name.endswith(".csv") and "_PLU_" in file_name:
+            file_path = os.path.join(plu_folder_path, file_name)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    reader = csv.reader(f)
+                    next(reader)  # Skip header
+                    for row in reader:
+                        if len(row) > 1:  # Check if row has at least 2 columns
+                            for cell in row[1:]:  # Skip first column (use types)
+                                if cell.strip() and cell.strip() in PLU_USE_TYPES:
+                                    unique_use_types.add(PLU_USE_TYPES[cell.strip()])
+            except Exception as e:
+                st.error(f"Error reading {file_name}: {str(e)}")
+    
+    return unique_use_types
 
 def clean_plu_text(text: str, is_first_column: bool = False) -> Tuple[str, List[Tuple[str, str]]]:
     """Enhanced cleaning with all new features"""
@@ -260,51 +331,51 @@ def correct_plu_files(plu_folder_path: str) -> Dict[str, Dict[str, List]]:
     """Enhanced correction with all new features"""
     results = {}
     plu_files = [f for f in os.listdir(plu_folder_path) if f.endswith(".csv") and "_PLU_" in f]
-    
+
     for file_name in plu_files:
         file_path = os.path.join(plu_folder_path, file_name)
         temp_path = os.path.join(plu_folder_path, f"temp_{file_name}")
         changes = []
         spelling_issues = []
-        
+
         try:
             with open(file_path, 'r', encoding='utf-8') as infile, \
                  open(temp_path, 'w', newline='', encoding='utf-8') as outfile:
-                
+
                 reader = csv.reader(infile)
                 writer = csv.writer(outfile)
                 header = next(reader)
                 writer.writerow(header)
-                
+
                 for row_num, row in enumerate(reader, start=2):
                     original_row = row.copy()
                     cleaned_row = []
                     row_spelling_issues = []
-                    
+
                     for col_num, cell in enumerate(row):
                         cleaned_cell, cell_errors = clean_plu_text(cell, is_first_column=(col_num == 0))
                         cleaned_row.append(cleaned_cell)
                         if cell_errors:
                             row_spelling_issues.extend([(row_num, word, correction) for word, correction in cell_errors])
-                    
+
                     if cleaned_row != original_row:
                         changes.append(f"Row {row_num}: {original_row} → {cleaned_row}")
                     if row_spelling_issues:
                         spelling_issues.extend(row_spelling_issues)
-                    
+
                     writer.writerow(cleaned_row)
-            
+
             os.replace(temp_path, file_path)
             results[file_name] = {
                 'changes': changes,
                 'spelling_issues': spelling_issues
             }
-            
+
         except Exception as e:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             results[file_name] = {'error': str(e)}
-    
+
     st.session_state.plu_files_corrected = True
     return results
 
@@ -540,7 +611,8 @@ def perform_plu_controls_qa(plu_folder_path: str) -> Dict:
         'key_file_created': False,
         'key_file_path': None,
         'all_unique_records': set(),
-        'folder_valid': False
+        'folder_valid': False,
+        'naming_errors': {}
     }
     
     try:
@@ -562,6 +634,18 @@ def perform_plu_controls_qa(plu_folder_path: str) -> Dict:
         
         results['folder_valid'] = True
         results['status_messages'].append(("Folder Validation", "✅ Valid folder structure"))
+
+        naming_errors = validate_file_naming(city_folder, shp_name)
+        if naming_errors:
+            results['naming_errors'] = naming_errors
+            for file_type, files in naming_errors.items():
+                results['status_messages'].append(
+                    (f"{file_type} Naming", 
+                    f"❌ {len(files)} files don't match SHP naming: {', '.join(files)}"))
+        else:
+            results['status_messages'].append(
+                ("File Naming", "✅ All files follow SHP naming convention"))
+        
         
         # Get zone codes from SHP
         zone_codes, zone_error = get_shp_zone_codes(shp_path)
@@ -630,7 +714,7 @@ def perform_plu_controls_qa(plu_folder_path: str) -> Dict:
                 final_path, write_error = write_in_keys_csv(
                     city_folder, shp_path, 
                     results['shp_zone_codes'], 
-                    results['all_unique_records'], 
+                    plu_folder_path, 
                     results['missing_zones']
                 )
                 
@@ -717,6 +801,18 @@ def create_word_report(qa_results: Dict, folder_path: str) -> str:
         p = doc.add_paragraph()
         p.add_run(f"{step}: ").bold = True
         p.add_run(status)
+
+    # File Naming Validation Section
+    doc.add_heading('File Naming Validation', level=1)
+    if qa_results.get('naming_errors'):
+        doc.add_paragraph('Files with incorrect naming convention:', style='Heading 2')
+        for file_type, files in qa_results['naming_errors'].items():
+            doc.add_paragraph(f"{file_type} Files:", style='Heading 3')
+            for file in files:
+                doc.add_paragraph(f"• {file}", style='List Bullet')
+    else:
+        doc.add_paragraph('All files follow correct naming convention', style='Intense Quote')
+    
     
     # PLU/Controls Section
     doc.add_heading('PLU/Controls QA Results', level=1)
@@ -819,6 +915,34 @@ def create_word_report(qa_results: Dict, folder_path: str) -> str:
 
 # Streamlit UI
 
+def extract_uploaded_zip(uploaded_zip):
+    """Extract uploaded zip to temporary directory and return path"""
+    if uploaded_zip is None:
+        return None
+
+    # Create temp directory
+    temp_dir = tempfile.mkdtemp()
+
+    # Save zip file temporarily
+    zip_path = os.path.join(temp_dir, "uploaded.zip")
+    with open(zip_path, "wb") as f:
+        f.write(uploaded_zip.getbuffer())
+
+    # Extract zip
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(temp_dir)
+
+    # Remove the zip file
+    os.remove(zip_path)
+
+    return temp_dir
+
+
+# Add this cleanup function
+def cleanup_temp_dir(temp_dir):
+    """Remove temporary directory and its contents"""
+    if temp_dir and os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
 
 def img_to_base64(img_path):
     return base64.b64encode(Path(img_path).read_bytes()).decode()
@@ -840,18 +964,35 @@ st.markdown(
 # Sidebar for folder selection
 with st.sidebar:
     st.header("Configuration")
-    plu_folder_path = st.text_input("Enter PLU folder path:", 
-                                  value=st.session_state.current_folder or "",
-                                  help="Path to the PLU folder containing zoning data")
-    
+    uploaded_zip = st.file_uploader(
+        "Upload Zoning Data Folder (as ZIP)",
+        type="zip",
+        help="Upload a zipped folder containing PLU, SHP, and other required files"
+    )
+
     if st.button("Run QA Analysis"):
-        if plu_folder_path and os.path.exists(plu_folder_path):
-            st.session_state.current_folder = plu_folder_path
-            with st.spinner("Performing QA analysis..."):
-                st.session_state.qa_results = perform_plu_controls_qa(plu_folder_path)
-            st.success("QA analysis completed!")
+        if uploaded_zip:
+            # Extract to temp folder
+            temp_dir = extract_uploaded_zip(uploaded_zip)
+
+            # Find PLU folder in extracted contents
+            plu_folder_path = None
+            for root, dirs, files in os.walk(temp_dir):
+                if "PLU" in dirs:
+                    plu_folder_path = os.path.join(root, "PLU")
+                    break
+
+            if plu_folder_path:
+                st.session_state.current_folder = temp_dir
+                with st.spinner("Performing QA analysis..."):
+                    st.session_state.qa_results = perform_plu_controls_qa(plu_folder_path)
+                    st.session_state.temp_dir = temp_dir  # Store for cleanup later
+                st.success("QA analysis completed!")
+            else:
+                st.error("No PLU folder found in uploaded zip")
+                cleanup_temp_dir(temp_dir)
         else:
-            st.error("Please enter a valid PLU folder path")
+            st.error("Please upload a zip file first")
 
 # Main content area - Initial instructions
 if not st.session_state.current_folder:
@@ -897,6 +1038,22 @@ if st.session_state.current_folder and st.session_state.qa_results:
                 st.error(f"{step}: {status}")
             else:
                 st.info(f"{step}: {status}")
+    # Naming Errors Section
+    with st.expander("File Naming Validation", expanded=False):
+        if naming_errors := st.session_state.qa_results.get('naming_errors'):
+            st.error("Files with incorrect naming convention:")
+        
+            for file_type, files in naming_errors.items():
+                st.markdown(f"**{file_type} Files:**")
+                for file in files:
+                    st.markdown(f"- `{file}`")
+                st.markdown("---")
+        
+            st.warning("All files should follow the SHP file naming pattern. Example:")
+            st.code("tn_alexandria_controls.csv  # Right Naming Convention\ntn_alexandri_controls.csv   # Wrong (missing 'a')")
+        else:
+            st.success("All files follow the correct naming convention")
+    
 
     
     # ---- PLU Use Types Validation Section ----
@@ -956,15 +1113,15 @@ if st.session_state.current_folder and st.session_state.qa_results:
         - Spell check with suggestions
         - Remove trailing commas
         """)
-        
+
             if st.button("Run PLU Corrections"):
                 with st.spinner("Applying enhancements..."):
                     correction_results = correct_plu_files(st.session_state.current_folder)
-            
+
                 st.session_state.correction_results = correction_results
                 st.session_state.plu_files_corrected = True
                 st.success("Corrections applied successfully!")
-            
+
             # Display results in a clean way without nesting
                 st.subheader("Correction Results")
             
@@ -1081,3 +1238,4 @@ if st.session_state.current_folder and st.session_state.qa_results:
     '<div class="footer">Powered by Zoneomics ©</div>',
     unsafe_allow_html=True
 )
+
