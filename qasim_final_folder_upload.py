@@ -330,6 +330,7 @@ def clean_plu_text(text: str, is_first_column: bool = False) -> Tuple[str, List[
 def correct_plu_files(plu_folder_path: str) -> Dict[str, Dict[str, List]]:
     """Enhanced correction with all new features"""
     results = {}
+
     plu_files = [f for f in os.listdir(plu_folder_path) if f.endswith(".csv") and "_PLU_" in f]
 
     for file_name in plu_files:
@@ -721,6 +722,9 @@ def perform_plu_controls_qa(plu_folder_path: str) -> Dict:
                 if write_error:
                     results['status_messages'].append(("Key_PLUS File", f"❌ {write_error}"))
                 else:
+                    with open(final_path, "rb") as f:
+                        st.session_state.key_file_content = f.read()
+                        st.session_state.key_file_name = os.path.basename(final_path)
                     results['key_file_path'] = final_path
                     results['key_file_created'] = True
                     results['status_messages'].append(("Key_PLUS File", f"✅ Created at {final_path}"))
@@ -974,7 +978,7 @@ with st.sidebar:
         if uploaded_zip:
             # Extract to temp folder
             temp_dir = extract_uploaded_zip(uploaded_zip)
-
+        
             # Find PLU folder in extracted contents
             plu_folder_path = None
             for root, dirs, files in os.walk(temp_dir):
@@ -987,6 +991,7 @@ with st.sidebar:
                 with st.spinner("Performing QA analysis..."):
                     st.session_state.qa_results = perform_plu_controls_qa(plu_folder_path)
                     st.session_state.temp_dir = temp_dir  # Store for cleanup later
+                    
                 st.success("QA analysis completed!")
             else:
                 st.error("No PLU folder found in uploaded zip")
@@ -1038,6 +1043,7 @@ if st.session_state.current_folder and st.session_state.qa_results:
                 st.error(f"{step}: {status}")
             else:
                 st.info(f"{step}: {status}")
+
     # Naming Errors Section
     with st.expander("File Naming Validation", expanded=False):
         if naming_errors := st.session_state.qa_results.get('naming_errors'):
@@ -1113,11 +1119,15 @@ if st.session_state.current_folder and st.session_state.qa_results:
         - Spell check with suggestions
         - Remove trailing commas
         """)
-
             if st.button("Run PLU Corrections"):
                 with st.spinner("Applying enhancements..."):
-                    correction_results = correct_plu_files(st.session_state.current_folder)
-
+                    temp_dir=extract_uploaded_zip(uploaded_zip)
+                    for root, dirs, files in os.walk(temp_dir):
+                        if "PLU" in dirs:
+                            plu_folder_path = os.path.join(root, "PLU")
+                            break
+                    correction_results = correct_plu_files(plu_folder_path)
+                    # cleanup_temp_dir(temp_dir)
                 st.session_state.correction_results = correction_results
                 st.session_state.plu_files_corrected = True
                 st.success("Corrections applied successfully!")
@@ -1234,8 +1244,23 @@ if st.session_state.current_folder and st.session_state.qa_results:
                 file_name="zoning_qa_report.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
+
+    if hasattr(st.session_state, 'key_file_content'):
+        st.download_button(
+            label="Download Key_PLUS File",
+            data=st.session_state.key_file_content,
+            file_name=st.session_state.key_file_name,
+            mime="text/csv",
+            help="Download the generated Key_PLUS CSV file"
+        )
+    else:
+        st.warning("Key_PLUS file not yet generated. Run QA analysis first.")
+            
     st.markdown(
     '<div class="footer">Powered by Zoneomics ©</div>',
     unsafe_allow_html=True
+
+
+    
 )
 
